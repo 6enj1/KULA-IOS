@@ -158,6 +158,8 @@ struct ProfileView: View {
                     Text(appState.currentUser?.email ?? "email@example.com")
                         .font(DesignSystem.Typography.subheadline)
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
 
                     HStack(spacing: 4) {
                         Image(systemName: "location.fill")

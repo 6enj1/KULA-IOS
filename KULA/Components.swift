@@ -465,7 +465,6 @@ struct BagListingCard: View {
     var onTap: () -> Void
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var isPressed = false
 
     private var isRegular: Bool { horizontalSizeClass == .regular }
     private var imageHeight: CGFloat { DesignSystem.Layout.listingImageHeight(isRegular: isRegular) }
@@ -602,22 +601,8 @@ struct BagListingCard: View {
             .background {
                 GlassBackground(cornerRadius: cornerRadius)
             }
-            .scaleEffect(isPressed ? 0.98 : 1.0)
         }
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    withAnimation(.easeOut(duration: 0.1)) {
-                        isPressed = true
-                    }
-                }
-                .onEnded { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        isPressed = false
-                    }
-                }
-        )
+        .buttonStyle(PressableButtonStyle())
         .accessibilityLabel("\(restaurant.name), \(bag.title), R\(Int(bag.priceNow))")
     }
 }
@@ -628,8 +613,6 @@ struct CompactBagCard: View {
     let restaurant: Restaurant
     var isRegularWidth: Bool = false
     var onTap: () -> Void
-
-    @State private var isPressed = false
 
     // iPad gets larger cards - uses Layout dimensions
     private var cardWidth: CGFloat { DesignSystem.Layout.carouselCardWidth(isRegular: isRegularWidth) }
@@ -715,22 +698,18 @@ struct CompactBagCard: View {
             .background {
                 GlassBackground(cornerRadius: cornerRadius)
             }
-            .scaleEffect(isPressed ? 0.95 : 1.0)
         }
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    withAnimation(.easeOut(duration: 0.1)) {
-                        isPressed = true
-                    }
-                }
-                .onEnded { _ in
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        isPressed = false
-                    }
-                }
-        )
+        .buttonStyle(PressableButtonStyle())
+    }
+}
+
+// MARK: - Pressable Button Style
+/// A button style that scales down on press without blocking scroll gestures.
+struct PressableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
 

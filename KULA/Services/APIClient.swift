@@ -14,7 +14,7 @@ import CommonCrypto
 enum APIConfig {
     // IMPORTANT: Set KULA_API_URL in build settings or Info.plist for production
     #if DEBUG
-    static let baseURL = "http://localhost:3000/api/v1"
+    static let baseURL = "http://192.168.1.114:3000/api/v1"
     #else
     static var baseURL: String {
         // Read from Info.plist or environment
