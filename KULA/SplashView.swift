@@ -11,6 +11,7 @@ struct SplashView: View {
     @State private var logoScale: CGFloat = 0.7
     @State private var logoOpacity: Double = 0
     @State private var labelOpacity: Double = 0
+    @State private var labelOffsetX: CGFloat = 60
     @State private var textOpacity: Double = 0
     @State private var shimmerOffset: CGFloat = -200
     @State private var isAnimationComplete = false
@@ -109,6 +110,7 @@ struct SplashView: View {
                         .foregroundStyle(labelGreen)
                         .tracking(8)
                         .opacity(labelOpacity)
+                        .offset(x: labelOffsetX)
                 }
 
                 Spacer()
@@ -242,10 +244,11 @@ struct SplashView: View {
             }
         }
 
-        // Phase 3: Label fade in
+        // Phase 3: Label slide in from right
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             withAnimation(.easeOut(duration: 0.5)) {
                 labelOpacity = 1
+                labelOffsetX = 0
             }
         }
 
