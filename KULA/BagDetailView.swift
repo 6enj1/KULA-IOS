@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import CoreLocation
 
 struct BagDetailView: View {
     let bag: Bag
@@ -18,6 +19,11 @@ struct BagDetailView: View {
     @State private var showCheckout = false
     @State private var isSaved = false
     @State private var showDirections = false
+    @State private var resolvedAddress: String?
+
+    private var displayAddress: String {
+        resolvedAddress ?? restaurant.address
+    }
 
     var body: some View {
         ZStack {
@@ -88,6 +94,7 @@ struct BagDetailView: View {
         }
         .onAppear {
             isSaved = appState.isSaved(bagId: bag.id)
+            reverseGeocodeRestaurantLocation()
         }
         .fullScreenCover(isPresented: $showCheckout) {
             CheckoutView(bag: bag, restaurant: restaurant, quantity: quantity)
@@ -186,7 +193,7 @@ struct BagDetailView: View {
                         .font(.system(size: 16))
                         .foregroundStyle(DesignSystem.Colors.textTertiary)
 
-                    Text(restaurant.address)
+                    Text(displayAddress)
                         .font(DesignSystem.Typography.subheadline)
                         .foregroundStyle(DesignSystem.Colors.textSecondary)
 
@@ -447,6 +454,23 @@ struct BagDetailView: View {
                     )
                 }
                 .ignoresSafeArea()
+        }
+    }
+
+    // MARK: - Reverse Geocode
+    private func reverseGeocodeRestaurantLocation() {
+        guard let lat = restaurant.latitude, let lng = restaurant.longitude else { return }
+        let location = CLLocation(latitude: lat, longitude: lng)
+        CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
+            guard let placemark = placemarks?.first else { return }
+            let parts = [
+                placemark.subThoroughfare,
+                placemark.thoroughfare,
+                placemark.locality
+            ].compactMap { $0 }
+            if !parts.isEmpty {
+                resolvedAddress = parts.joined(separator: " ")
+            }
         }
     }
 

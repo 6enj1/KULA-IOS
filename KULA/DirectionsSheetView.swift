@@ -13,6 +13,7 @@ struct DirectionsSheetView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var locationManager = LocationManager.shared
     @State private var showCopiedToast = false
+    @State private var resolvedAddress: String?
 
     private var userCoord: CLLocationCoordinate2D {
         locationManager.currentLocation?.coordinate ?? CLLocationCoordinate2D(latitude: 0, longitude: 0)
@@ -28,6 +29,11 @@ struct DirectionsSheetView: View {
     private var hasValidCoordinates: Bool {
         userCoord.latitude != 0 && userCoord.longitude != 0 &&
         businessCoord.latitude != 0 && businessCoord.longitude != 0
+    }
+
+    /// Address derived from coordinates (falls back to stored address while loading)
+    private var displayAddress: String {
+        resolvedAddress ?? restaurant.address
     }
 
     var body: some View {
@@ -109,6 +115,28 @@ struct DirectionsSheetView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .onAppear {
+            reverseGeocodeBusinessLocation()
+        }
+    }
+
+    // MARK: - Reverse Geocode
+    private func reverseGeocodeBusinessLocation() {
+        let coord = businessCoord
+        guard coord.latitude != 0 && coord.longitude != 0 else { return }
+
+        let location = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+        CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
+            guard let placemark = placemarks?.first else { return }
+            let parts = [
+                placemark.subThoroughfare,
+                placemark.thoroughfare,
+                placemark.locality
+            ].compactMap { $0 }
+            if !parts.isEmpty {
+                resolvedAddress = parts.joined(separator: " ")
+            }
+        }
     }
 
     // MARK: - Map Section
@@ -174,11 +202,11 @@ struct DirectionsSheetView: View {
             infoRow(
                 icon: "mappin.circle.fill",
                 iconColor: .red,
-                title: restaurant.address,
+                title: displayAddress,
                 subtitle: nil
             ) {
                 Button {
-                    UIPasteboard.general.string = restaurant.address
+                    UIPasteboard.general.string = displayAddress
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                         showCopiedToast = true
