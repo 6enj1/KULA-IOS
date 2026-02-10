@@ -48,9 +48,9 @@ struct HomeView: View {
                     headerSection
                         .adaptivePadding()
 
-                    // Location denied banner
-                    if locationManager.isDeniedOrRestricted {
-                        locationDeniedBanner
+                    // Location banner — denied/restricted OR no location + not yet asked
+                    if locationManager.isDeniedOrRestricted || (!appState.hasLocation && locationManager.canRequestPermission) {
+                        locationBanner
                             .adaptivePadding()
                     }
 
@@ -133,6 +133,7 @@ struct HomeView: View {
         }
         .onChange(of: selectedAddress) { _, newAddress in
             saveSelectedAddress(newAddress)
+            Task { await appState.setActiveAddress(newAddress) }
         }
         // When location authorization changes (e.g., user enables in Settings), update
         .onChange(of: locationManager.authorizationStatus) { _, newStatus in
@@ -202,8 +203,11 @@ struct HomeView: View {
         .padding(.horizontal, DesignSystem.Spacing.xl)
     }
 
-    // MARK: - Location Denied Banner
-    private var locationDeniedBanner: some View {
+    // MARK: - Location Banner
+    /// Adapts to permission state:
+    /// - `.notDetermined` → "Enable" button triggers permission prompt
+    /// - `.denied`/`.restricted` → "Settings" button opens system Settings
+    private var locationBanner: some View {
         GlassCard {
             HStack(spacing: DesignSystem.Spacing.md) {
                 ZStack {
@@ -211,13 +215,15 @@ struct HomeView: View {
                         .fill(DesignSystem.Colors.warning.opacity(0.15))
                         .frame(width: 44, height: 44)
 
-                    Image(systemName: "location.slash.fill")
+                    Image(systemName: locationManager.isDeniedOrRestricted
+                          ? "location.slash.fill" : "location.fill")
                         .font(.system(size: 20))
                         .foregroundStyle(DesignSystem.Colors.warning)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Location Access Disabled")
+                    Text(locationManager.isDeniedOrRestricted
+                         ? "Location Access Disabled" : "Location Access Needed")
                         .font(DesignSystem.Typography.subheadline)
                         .fontWeight(.semibold)
                         .foregroundStyle(DesignSystem.Colors.textPrimary)
@@ -230,9 +236,13 @@ struct HomeView: View {
                 Spacer()
 
                 Button {
-                    locationManager.openAppSettings()
+                    if locationManager.canRequestPermission {
+                        locationManager.requestPermission()
+                    } else {
+                        locationManager.openAppSettings()
+                    }
                 } label: {
-                    Text("Settings")
+                    Text(locationManager.isDeniedOrRestricted ? "Settings" : "Enable")
                         .font(DesignSystem.Typography.caption)
                         .fontWeight(.semibold)
                         .foregroundStyle(.white)

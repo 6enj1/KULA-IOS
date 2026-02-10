@@ -366,14 +366,6 @@ struct AnimatedRouteMapView: UIViewRepresentable {
         mapView.isPitchEnabled = false
         mapView.showsUserLocation = false
 
-        // Set region
-        let center = CLLocationCoordinate2D(
-            latitude: (userCoord.latitude + businessCoord.latitude) / 2,
-            longitude: (userCoord.longitude + businessCoord.longitude) / 2
-        )
-        let span = MKCoordinateSpan(latitudeDelta: 0.015, longitudeDelta: 0.015)
-        mapView.setRegion(MKCoordinateRegion(center: center, span: span), animated: false)
-
         // Add annotations
         let userAnnotation = MKPointAnnotation()
         userAnnotation.coordinate = userCoord
@@ -388,6 +380,15 @@ struct AnimatedRouteMapView: UIViewRepresentable {
         // Add polyline overlay
         let polyline = MKPolyline(coordinates: [userCoord, businessCoord], count: 2)
         mapView.addOverlay(polyline)
+
+        // Fit camera to show both pins with padding
+        let points = [userCoord, businessCoord].map { MKMapPoint($0) }
+        var mapRect = MKMapRect.null
+        for point in points {
+            mapRect = mapRect.union(MKMapRect(origin: point, size: MKMapSize(width: 1, height: 1)))
+        }
+        let padding = UIEdgeInsets(top: 40, left: 40, bottom: 40, right: 40)
+        mapView.setVisibleMapRect(mapRect, edgePadding: padding, animated: false)
 
         return mapView
     }

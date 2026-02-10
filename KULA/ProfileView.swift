@@ -23,26 +23,25 @@ struct ProfileView: View {
         horizontalSizeClass == .regular
     }
 
-    /// Display string for user's location
+    /// Display string for user's location — prefers human-readable address over raw coordinates.
     private var locationDisplayString: String {
-        // Check if location permission is denied/restricted first
         if locationManager.isDeniedOrRestricted {
             return "Location access denied"
         }
 
-        // First try the user's saved location
-        if let loc = appState.currentUser?.location {
-            return String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
-        }
-
-        // Fall back to current location from LocationManager (only if authorized)
+        // Prefer the reverse-geocoded address from device GPS
         if locationManager.isAuthorized {
             if let address = locationManager.currentAddress, !address.isEmpty {
                 return address
             }
-            if let loc = locationManager.currentLocation {
-                return String(format: "%.4f, %.4f", loc.coordinate.latitude, loc.coordinate.longitude)
-            }
+        }
+
+        // Fall back to raw coordinates (server-stored or device GPS)
+        if let loc = locationManager.currentLocation {
+            return String(format: "%.4f, %.4f", loc.coordinate.latitude, loc.coordinate.longitude)
+        }
+        if let loc = appState.currentUser?.location {
+            return String(format: "%.4f, %.4f", loc.latitude, loc.longitude)
         }
 
         return "Location not set"

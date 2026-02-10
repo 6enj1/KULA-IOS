@@ -1316,8 +1316,8 @@ struct NavigationMapPreviewWrapper: View {
 
     var body: some View {
         NavigationMapView(
-            userCoord: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194),
-            businessCoord: CLLocationCoordinate2D(latitude: 37.7956, longitude: -122.3933),
+            userCoord: CLLocationCoordinate2D(latitude: -26.1255, longitude: 28.0347),
+            businessCoord: CLLocationCoordinate2D(latitude: -26.1242, longitude: 28.0340),
             userHeading: 45,
             route: nil,
             isFollowMode: $isFollowMode

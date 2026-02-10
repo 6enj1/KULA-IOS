@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import CoreLocation
 
 // MARK: - App State
 @MainActor
@@ -42,6 +43,24 @@ final class AppState: ObservableObject {
     // Directions Sheet
     @Published var showDirectionsSheet: Bool = false
 
+    // Location — single source of truth for all API calls
+    // In DEBUG, use hardcoded Johannesburg default so the simulator always has data.
+    // In production, nil means "no location resolved" → UI shows "Enable location" banner.
+    #if DEBUG
+    @Published var effectiveLatitude: Double? = -26.1255
+    @Published var effectiveLongitude: Double? = 28.0347
+    #else
+    @Published var effectiveLatitude: Double?
+    @Published var effectiveLongitude: Double?
+    #endif
+    @Published var isUsingManualAddress: Bool = false
+    private var locationCancellable: AnyCancellable?
+    private var lastFetchedLocation: CLLocation?
+    private var didSyncLocationThisSession = false
+
+    /// Whether a usable location has been resolved (GPS, manual, or server-stored).
+    var hasLocation: Bool { effectiveLatitude != nil && effectiveLongitude != nil }
+
     // Services
     private let authService = AuthService.shared
     private let bagService = BagService.shared
@@ -52,6 +71,17 @@ final class AppState: ObservableObject {
 
     // MARK: - Initialization
     init() {
+        // Subscribe to device GPS updates (2s debounce to avoid spam during initial acquisition)
+        locationCancellable = LocationManager.shared.$currentLocation
+            .compactMap { $0 }
+            .debounce(for: .seconds(2), scheduler: RunLoop.main)
+            .sink { [weak self] location in
+                guard let self else { return }
+                Task { @MainActor in
+                    self.handleDeviceLocationUpdate(location)
+                }
+            }
+
         // Check if user has stored tokens - but DON'T set isAuthenticated yet
         // We need to validate tokens with the backend first
         if TokenManager.shared.isLoggedIn {
@@ -130,27 +160,33 @@ final class AppState: ObservableObject {
             print("[AppState] Categories loaded: \(categories.count)")
             #endif
 
-            // Load bags with user location (San Francisco default for testing)
-            let lat = currentUser?.location?.latitude ?? 37.7749
-            let lng = currentUser?.location?.longitude ?? -122.4194
+            // Resolve best available location for initial data fetch
+            resolveInitialLocation()
 
-            bags = try await bagService.getBags(
-                latitude: lat,
-                longitude: lng,
-                maxDistance: filterOptions.maxDistance
-            )
-            #if DEBUG
-            print("[AppState] Bags loaded: \(bags.count)")
-            #endif
+            // Only fetch bags/restaurants if we have a resolved location
+            if let lat = effectiveLatitude, let lng = effectiveLongitude {
+                async let bagsResult = bagService.getBags(
+                    latitude: lat,
+                    longitude: lng,
+                    maxDistance: filterOptions.maxDistance
+                )
+                async let restaurantsResult = bagService.getRestaurants(
+                    latitude: lat,
+                    longitude: lng
+                )
 
-            // Load restaurants
-            restaurants = try await bagService.getRestaurants(
-                latitude: lat,
-                longitude: lng
-            )
-            #if DEBUG
-            print("[AppState] Restaurants loaded: \(restaurants.count)")
-            #endif
+                bags = try await bagsResult
+                restaurants = try await restaurantsResult
+
+                #if DEBUG
+                print("[AppState] Bags loaded: \(bags.count)")
+                print("[AppState] Restaurants loaded: \(restaurants.count)")
+                #endif
+            } else {
+                #if DEBUG
+                print("[AppState] No location resolved — skipping bag/restaurant fetch")
+                #endif
+            }
 
             // Load orders if authenticated
             if isAuthenticated {
@@ -515,15 +551,13 @@ final class AppState: ObservableObject {
         user.location = location
         currentUser = user
 
+        // Also update effective coords so all API calls use the new location
+        effectiveLatitude = location.latitude
+        effectiveLongitude = location.longitude
+
         do {
             try await authService.updateLocation(latitude: location.latitude, longitude: location.longitude)
-
-            // Refresh bags with new location
-            bags = try await bagService.getBags(
-                latitude: location.latitude,
-                longitude: location.longitude,
-                maxDistance: filterOptions.maxDistance
-            )
+            await refreshDataForCurrentLocation()
         } catch {
             self.error = error.localizedDescription
         }
@@ -541,6 +575,152 @@ final class AppState: ObservableObject {
         guard var user = currentUser else { return }
         user.loyaltyPoints += points
         currentUser = user
+    }
+
+    // MARK: - Device GPS Location
+
+    /// Applies a 500m significant-change filter, updates effective coords, and refreshes data.
+    /// Backend sync happens at most once per session to avoid excessive PATCH calls.
+    private func handleDeviceLocationUpdate(_ location: CLLocation) {
+        // Ignore GPS updates when user has manually picked a saved address
+        guard !isUsingManualAddress else { return }
+
+        // Significant-change filter: skip if moved less than 500m from last fetch
+        if let last = lastFetchedLocation, location.distance(from: last) < 500 {
+            return
+        }
+
+        #if DEBUG
+        print("[AppState] Device location update: \(location.coordinate.latitude), \(location.coordinate.longitude)")
+        #endif
+
+        lastFetchedLocation = location
+        effectiveLatitude = location.coordinate.latitude
+        effectiveLongitude = location.coordinate.longitude
+
+        Task {
+            await refreshDataForCurrentLocation()
+        }
+
+        // Sync to backend at most once per session
+        if !didSyncLocationThisSession {
+            didSyncLocationThisSession = true
+            syncLocationToBackend(lat: location.coordinate.latitude, lng: location.coordinate.longitude)
+        }
+    }
+
+    /// Fetches bags and restaurants using the current effective coordinates (parallel).
+    func refreshDataForCurrentLocation() async {
+        guard let lat = effectiveLatitude, let lng = effectiveLongitude else { return }
+        do {
+            async let bagsResult = bagService.getBags(
+                latitude: lat,
+                longitude: lng,
+                maxDistance: filterOptions.maxDistance
+            )
+            async let restaurantsResult = bagService.getRestaurants(
+                latitude: lat,
+                longitude: lng
+            )
+
+            bags = try await bagsResult
+            restaurants = try await restaurantsResult
+
+            #if DEBUG
+            print("[AppState] Data refreshed for (\(lat), \(lng)): \(bags.count) bags, \(restaurants.count) restaurants")
+            #endif
+        } catch {
+            self.error = error.localizedDescription
+            #if DEBUG
+            print("[AppState] Error refreshing data for location: \(error)")
+            #endif
+        }
+    }
+
+    /// Fire-and-forget PATCH to keep the server in sync with device location.
+    private func syncLocationToBackend(lat: Double, lng: Double) {
+        Task {
+            do {
+                try await authService.updateLocation(latitude: lat, longitude: lng)
+                #if DEBUG
+                print("[AppState] Location synced to backend: \(lat), \(lng)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("[AppState] Failed to sync location to backend: \(error)")
+                #endif
+            }
+        }
+    }
+
+    /// Priority: manual address > device GPS > server-stored > (DEBUG-only hardcoded).
+    /// In production, coords remain nil if no source is available → UI shows "Enable location".
+    private func resolveInitialLocation() {
+        // 1. Manual address — effective coords already set by setActiveAddress
+        if isUsingManualAddress, effectiveLatitude != nil {
+            #if DEBUG
+            print("[AppState] Keeping manual address: \(effectiveLatitude!), \(effectiveLongitude!)")
+            #endif
+            return
+        }
+
+        // 2. Device GPS
+        if let deviceLocation = LocationManager.shared.currentLocation {
+            effectiveLatitude = deviceLocation.coordinate.latitude
+            effectiveLongitude = deviceLocation.coordinate.longitude
+            lastFetchedLocation = deviceLocation
+            #if DEBUG
+            print("[AppState] Using device GPS: \(deviceLocation.coordinate.latitude), \(deviceLocation.coordinate.longitude)")
+            #endif
+            return
+        }
+
+        // 3. Server-stored user location (restores state from last session)
+        if let serverLocation = currentUser?.location {
+            effectiveLatitude = serverLocation.latitude
+            effectiveLongitude = serverLocation.longitude
+            #if DEBUG
+            print("[AppState] Using server location: \(serverLocation.latitude), \(serverLocation.longitude)")
+            #endif
+            return
+        }
+
+        // 4. DEBUG-only hardcoded fallback — never used in production
+        #if DEBUG
+        if effectiveLatitude == nil {
+            effectiveLatitude = -26.1255
+            effectiveLongitude = 28.0347
+            print("[AppState] Using DEBUG hardcoded default")
+        }
+        #endif
+        // Production: coords remain nil → HomeView shows "Enable location" banner
+    }
+
+    /// Called by HomeView when user picks an address from the picker.
+    /// Toggles `isUsingManualAddress` and re-fetches data for the selected address.
+    func setActiveAddress(_ address: SavedAddress) async {
+        if address.type == .current {
+            // Switching back to "Current Location" — re-enable GPS-driven updates
+            isUsingManualAddress = false
+            if let deviceLocation = LocationManager.shared.currentLocation {
+                effectiveLatitude = deviceLocation.coordinate.latitude
+                effectiveLongitude = deviceLocation.coordinate.longitude
+                lastFetchedLocation = deviceLocation
+            }
+        } else {
+            // User picked a saved address — override GPS
+            isUsingManualAddress = true
+            if let lat = address.latitude, let lng = address.longitude {
+                effectiveLatitude = lat
+                effectiveLongitude = lng
+            }
+        }
+
+        #if DEBUG
+        print("[AppState] Active address set: \(address.name) (manual=\(isUsingManualAddress)) -> (\(effectiveLatitude), \(effectiveLongitude))")
+        #endif
+
+        await refreshDataForCurrentLocation()
     }
 
     // MARK: - Helper Methods
@@ -624,10 +804,8 @@ final class AppState: ObservableObject {
 
     // MARK: - Refresh Data
     func refreshBags() async {
+        guard let lat = effectiveLatitude, let lng = effectiveLongitude else { return }
         do {
-            let lat = currentUser?.location?.latitude ?? 37.7749
-            let lng = currentUser?.location?.longitude ?? -122.4194
-
             bags = try await bagService.getBags(
                 latitude: lat,
                 longitude: lng,
