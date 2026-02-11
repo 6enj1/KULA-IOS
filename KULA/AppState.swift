@@ -768,6 +768,7 @@ final class AppState: ObservableObject {
                 let restaurant = self.restaurant(for: bag.restaurantId)
                 return bag.title.localizedCaseInsensitiveContains(searchText) ||
                        bag.foodType.localizedCaseInsensitiveContains(searchText) ||
+                       bag.description.localizedCaseInsensitiveContains(searchText) ||
                        restaurant?.name.localizedCaseInsensitiveContains(searchText) == true
             }
         }
@@ -800,6 +801,16 @@ final class AppState: ObservableObject {
         }
 
         return result
+    }
+
+    func bagsForCategory(_ name: String) -> [Bag] {
+        filteredBags(searchText: "").filter {
+            $0.foodType.localizedCaseInsensitiveCompare(name) == .orderedSame
+        }
+    }
+
+    func bagsForRestaurant(_ id: String) -> [Bag] {
+        bags.filter { $0.restaurantId == id }
     }
 
     // MARK: - Refresh Data

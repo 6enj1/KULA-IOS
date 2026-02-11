@@ -9,6 +9,19 @@ import SwiftUI
 import Speech
 import AVFoundation
 
+// MARK: - Search Destination
+enum SearchDestination: Hashable {
+    case categoryResults(String)
+    case keywordResults(String)
+    case restaurantDetail(String)
+}
+
+// MARK: - Search Mode
+enum SearchMode: Hashable {
+    case category(String)
+    case keyword(String)
+}
+
 // MARK: - Search View
 struct SearchView: View {
     @Binding var showSearch: Bool
@@ -21,40 +34,67 @@ struct SearchView: View {
     @State private var recentSearches: [String] = UserDefaults.standard.stringArray(forKey: "recentSearches") ?? []
 
     @State private var keyboardHeight: CGFloat = 0
+    @State private var navigationPath = NavigationPath()
 
     var body: some View {
-        ZStack {
-            AppBackgroundGradient()
+        NavigationStack(path: $navigationPath) {
+            ZStack {
+                AppBackgroundGradient()
 
-            VStack(spacing: 0) {
-                // Header
-                header
-                    .padding(.horizontal, DesignSystem.Spacing.lg)
-                    .padding(.top, DesignSystem.Spacing.md)
+                VStack(spacing: 0) {
+                    // Header
+                    header
+                        .padding(.horizontal, DesignSystem.Spacing.lg)
+                        .padding(.top, DesignSystem.Spacing.md)
 
-                // Content
-                ScrollView {
-                    if searchText.isEmpty {
-                        emptyStateContent
-                    } else {
-                        searchResultsContent
+                    // Content
+                    ScrollView {
+                        if searchText.isEmpty {
+                            emptyStateContent
+                        } else {
+                            searchResultsContent
+                        }
+                    }
+                    .scrollDismissesKeyboard(.immediately)
+                }
+
+                // Floating Search Bar + Home Button at bottom
+                VStack {
+                    Spacer()
+                    HStack(spacing: 10) {
+                        searchBar
+                        homeButton
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, keyboardHeight > 0 ? keyboardHeight + 12 : 24)
+                }
+            }
+            .ignoresSafeArea(edges: .bottom)
+            .navigationBarHidden(true)
+            .navigationDestination(for: SearchDestination.self) { destination in
+                switch destination {
+                case .categoryResults(let category):
+                    SearchResultsView(
+                        title: category,
+                        searchMode: .category(category),
+                        navigationPath: $navigationPath
+                    )
+                case .keywordResults(let keyword):
+                    SearchResultsView(
+                        title: "'\(keyword)'",
+                        searchMode: .keyword(keyword),
+                        navigationPath: $navigationPath
+                    )
+                case .restaurantDetail(let restaurantId):
+                    if let restaurant = appState.restaurant(for: restaurantId) {
+                        RestaurantDetailView(
+                            restaurant: restaurant,
+                            navigationPath: $navigationPath
+                        )
                     }
                 }
-                .scrollDismissesKeyboard(.immediately)
-            }
-
-            // Floating Search Bar + Home Button at bottom
-            VStack {
-                Spacer()
-                HStack(spacing: 10) {
-                    searchBar
-                    homeButton
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, keyboardHeight > 0 ? keyboardHeight + 12 : 24)
             }
         }
-        .ignoresSafeArea(edges: .bottom)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { notification in
             if let keyboardFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
@@ -94,7 +134,10 @@ struct SearchView: View {
                 .focused($isSearchFocused)
                 .submitLabel(.search)
                 .onSubmit {
-                    saveRecentSearch(searchText)
+                    if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
+                        saveRecentSearch(searchText)
+                        navigationPath.append(SearchDestination.keywordResults(searchText))
+                    }
                 }
 
             // Mic / Clear button
@@ -271,7 +314,8 @@ struct SearchView: View {
                 HStack(spacing: DesignSystem.Spacing.sm) {
                     ForEach(recentSearches, id: \.self) { search in
                         RecentSearchChip(text: search) {
-                            searchText = search
+                            saveRecentSearch(search)
+                            navigationPath.append(SearchDestination.keywordResults(search))
                         }
                     }
                 }
@@ -307,7 +351,7 @@ struct SearchView: View {
                     HStack(spacing: DesignSystem.Spacing.md) {
                         ForEach(orderAgainRestaurants) { restaurant in
                             OrderAgainItem(restaurant: restaurant) {
-                                // Navigate to restaurant
+                                navigationPath.append(SearchDestination.restaurantDetail(restaurant.id))
                             }
                         }
                     }
@@ -334,7 +378,7 @@ struct SearchView: View {
                 FlowLayout(spacing: DesignSystem.Spacing.sm) {
                     ForEach(appState.categories) { category in
                         CategoryChip(category: SearchCategory(id: category.id, name: category.name, emoji: "")) {
-                            searchText = category.name
+                            navigationPath.append(SearchDestination.categoryResults(category.name))
                         }
                     }
                 }
@@ -350,7 +394,7 @@ struct SearchView: View {
         }
         let matchingRestaurants = appState.restaurants.filter {
             $0.name.lowercased().contains(searchText.lowercased())
-        }.map { SearchRestaurant(id: $0.id, name: $0.name, subtitle: $0.address, icon: $0.foodIcon, etaMinutes: Int($0.distanceKm * 5)) }
+        }
 
         let foodTypes = Set(appState.bags.map { $0.foodType })
         let matchingSuggestions = Array(foodTypes).filter {
@@ -366,8 +410,8 @@ struct SearchView: View {
                     subtitle: nil,
                     showRestaurantAvatar: false
                 ) {
-                    searchText = recent
-                    isSearchFocused = false
+                    saveRecentSearch(recent)
+                    navigationPath.append(SearchDestination.keywordResults(recent))
                 }
 
                 searchDivider
@@ -376,19 +420,19 @@ struct SearchView: View {
             // B) Restaurant matches
             ForEach(Array(matchingRestaurants.enumerated()), id: \.element.id) { index, restaurant in
                 SearchResultRow(
-                    icon: restaurant.icon,
+                    icon: restaurant.foodIcon,
                     title: restaurant.name,
-                    subtitle: restaurant.subtitle,
+                    subtitle: restaurant.address,
                     showRestaurantAvatar: true
                 ) {
-                    // Navigate to restaurant
                     isSearchFocused = false
+                    navigationPath.append(SearchDestination.restaurantDetail(restaurant.id))
                 }
 
                 searchDivider
             }
 
-            // C) Suggestion matches
+            // C) Suggestion matches (food type categories)
             ForEach(Array(matchingSuggestions.enumerated()), id: \.element) { index, suggestion in
                 SearchResultRow(
                     icon: "magnifyingglass",
@@ -397,7 +441,7 @@ struct SearchView: View {
                     showRestaurantAvatar: false
                 ) {
                     saveRecentSearch(suggestion)
-                    searchText = suggestion
+                    navigationPath.append(SearchDestination.categoryResults(suggestion))
                 }
 
                 searchDivider
@@ -411,9 +455,8 @@ struct SearchView: View {
                 showRestaurantAvatar: false,
                 isAccented: true
             ) {
-                // Perform search
                 saveRecentSearch(searchText)
-                isSearchFocused = false
+                navigationPath.append(SearchDestination.keywordResults(searchText))
             }
         }
         .padding(.horizontal, DesignSystem.Spacing.lg)
@@ -445,6 +488,307 @@ struct SearchView: View {
 
         // Save to UserDefaults
         UserDefaults.standard.set(recentSearches, forKey: "recentSearches")
+    }
+}
+
+// MARK: - Search Results View
+struct SearchResultsView: View {
+    let title: String
+    let searchMode: SearchMode
+    @Binding var navigationPath: NavigationPath
+    @EnvironmentObject var appState: AppState
+    @State private var selectedBag: Bag?
+
+    private var bags: [Bag] {
+        switch searchMode {
+        case .category(let name):
+            return appState.bagsForCategory(name)
+        case .keyword(let keyword):
+            return appState.filteredBags(searchText: keyword)
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            AppBackgroundGradient()
+
+            if bags.isEmpty {
+                // Empty state
+                VStack(spacing: DesignSystem.Spacing.lg) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 48))
+                        .foregroundStyle(DesignSystem.Colors.textTertiary)
+
+                    Text("No bags found")
+                        .font(DesignSystem.Typography.headline)
+                        .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+                    Text("Try a different search term or category")
+                        .font(DesignSystem.Typography.body)
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, DesignSystem.Spacing.xl)
+            } else {
+                ScrollView {
+                    VStack(spacing: DesignSystem.Spacing.md) {
+                        Text("\(bags.count) result\(bags.count == 1 ? "" : "s")")
+                            .font(DesignSystem.Typography.subheadline)
+                            .foregroundStyle(DesignSystem.Colors.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, DesignSystem.Spacing.lg)
+
+                        LazyVStack(spacing: DesignSystem.Spacing.md) {
+                            ForEach(bags) { bag in
+                                if let restaurant = appState.restaurant(for: bag.restaurantId) {
+                                    BagListingCard(
+                                        bag: bag,
+                                        restaurant: restaurant,
+                                        isSaved: bagBinding(for: bag.id)
+                                    ) {
+                                        selectedBag = bag
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, DesignSystem.Spacing.lg)
+                    }
+                    .padding(.top, DesignSystem.Spacing.md)
+                    .padding(.bottom, 40)
+                }
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(title)
+                    .font(DesignSystem.Typography.headline)
+                    .foregroundStyle(DesignSystem.Colors.textPrimary)
+            }
+        }
+        .navigationDestination(item: $selectedBag) { bag in
+            if let restaurant = appState.restaurant(for: bag.restaurantId) {
+                BagDetailView(bag: bag, restaurant: restaurant)
+            }
+        }
+    }
+
+    private func bagBinding(for bagId: String) -> Binding<Bool> {
+        Binding(
+            get: { appState.isSaved(bagId: bagId) },
+            set: { _ in appState.toggleSaved(bagId: bagId) }
+        )
+    }
+}
+
+// MARK: - Restaurant Detail View
+struct RestaurantDetailView: View {
+    let restaurant: Restaurant
+    @Binding var navigationPath: NavigationPath
+    @EnvironmentObject var appState: AppState
+    @State private var selectedBag: Bag?
+
+    private var bags: [Bag] {
+        appState.bagsForRestaurant(restaurant.id)
+    }
+
+    var body: some View {
+        ZStack {
+            AppBackgroundGradient()
+
+            ScrollView {
+                VStack(spacing: DesignSystem.Spacing.lg) {
+                    // Restaurant header
+                    restaurantHeader
+
+                    // Restaurant info card
+                    restaurantInfoCard
+
+                    // Bags section
+                    bagsSection
+                }
+                .padding(.top, DesignSystem.Spacing.md)
+                .padding(.bottom, 40)
+            }
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text(restaurant.name)
+                    .font(DesignSystem.Typography.headline)
+                    .foregroundStyle(DesignSystem.Colors.textPrimary)
+            }
+        }
+        .navigationDestination(item: $selectedBag) { bag in
+            BagDetailView(bag: bag, restaurant: restaurant)
+        }
+    }
+
+    // MARK: - Restaurant Header
+    private var restaurantHeader: some View {
+        VStack(spacing: DesignSystem.Spacing.md) {
+            // Icon
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                DesignSystem.Colors.primaryGreen.opacity(0.6),
+                                DesignSystem.Colors.deepTeal
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+
+                Image(systemName: restaurant.foodIcon)
+                    .font(.system(size: 36))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .frame(width: 80, height: 80)
+            .overlay {
+                Circle()
+                    .strokeBorder(.white.opacity(0.2), lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
+
+            // Name
+            Text(restaurant.name)
+                .font(DesignSystem.Typography.title2)
+                .foregroundStyle(DesignSystem.Colors.textPrimary)
+
+            // Rating
+            HStack(spacing: DesignSystem.Spacing.xs) {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(DesignSystem.Colors.warning)
+                Text(String(format: "%.1f", restaurant.rating))
+                    .font(DesignSystem.Typography.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(DesignSystem.Colors.textPrimary)
+                Text("(\(restaurant.ratingCount))")
+                    .font(DesignSystem.Typography.caption)
+                    .foregroundStyle(DesignSystem.Colors.textTertiary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, DesignSystem.Spacing.lg)
+    }
+
+    // MARK: - Restaurant Info Card
+    private var restaurantInfoCard: some View {
+        GlassCard(padding: DesignSystem.Spacing.lg, cornerRadius: DesignSystem.CornerRadius.xl) {
+            VStack(spacing: DesignSystem.Spacing.md) {
+                // Address
+                HStack(spacing: DesignSystem.Spacing.sm) {
+                    Image(systemName: "mappin.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(DesignSystem.Colors.accent)
+                    Text(restaurant.address)
+                        .font(DesignSystem.Typography.body)
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    Spacer()
+                }
+
+                // Distance
+                HStack(spacing: DesignSystem.Spacing.sm) {
+                    Image(systemName: "location.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(DesignSystem.Colors.accent)
+                    Text(String(format: "%.1f km away", restaurant.distanceKm))
+                        .font(DesignSystem.Typography.body)
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+                    Spacer()
+                }
+
+                // Open status
+                HStack(spacing: DesignSystem.Spacing.sm) {
+                    Image(systemName: "clock.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(restaurant.isOpenNow ? DesignSystem.Colors.success : DesignSystem.Colors.error)
+                    if restaurant.isOpenNow {
+                        HStack(spacing: 4) {
+                            Text("Open now")
+                                .font(DesignSystem.Typography.body)
+                                .foregroundStyle(DesignSystem.Colors.success)
+                            if let closing = restaurant.closingTimeToday {
+                                Text("until \(closing)")
+                                    .font(DesignSystem.Typography.body)
+                                    .foregroundStyle(DesignSystem.Colors.textTertiary)
+                            }
+                        }
+                    } else {
+                        Text("Closed")
+                            .font(DesignSystem.Typography.body)
+                            .foregroundStyle(DesignSystem.Colors.error)
+                    }
+                    Spacer()
+                }
+
+                // Phone (if available)
+                if let phone = restaurant.phone {
+                    HStack(spacing: DesignSystem.Spacing.sm) {
+                        Image(systemName: "phone.circle.fill")
+                            .font(.system(size: 20))
+                            .foregroundStyle(DesignSystem.Colors.accent)
+                        Text(phone)
+                            .font(DesignSystem.Typography.body)
+                            .foregroundStyle(DesignSystem.Colors.textSecondary)
+                        Spacer()
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, DesignSystem.Spacing.lg)
+    }
+
+    // MARK: - Bags Section
+    private var bagsSection: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
+            Text("Available bags")
+                .font(DesignSystem.Typography.headline)
+                .foregroundStyle(DesignSystem.Colors.textPrimary)
+                .padding(.horizontal, DesignSystem.Spacing.lg)
+
+            if bags.isEmpty {
+                VStack(spacing: DesignSystem.Spacing.md) {
+                    Image(systemName: "bag")
+                        .font(.system(size: 40))
+                        .foregroundStyle(DesignSystem.Colors.textTertiary)
+
+                    Text("No bags available")
+                        .font(DesignSystem.Typography.subheadline)
+                        .foregroundStyle(DesignSystem.Colors.textSecondary)
+
+                    Text("Check back later for new surprise bags")
+                        .font(DesignSystem.Typography.caption)
+                        .foregroundStyle(DesignSystem.Colors.textTertiary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, DesignSystem.Spacing.xxl)
+            } else {
+                LazyVStack(spacing: DesignSystem.Spacing.md) {
+                    ForEach(bags) { bag in
+                        BagListingCard(
+                            bag: bag,
+                            restaurant: restaurant,
+                            isSaved: bagBinding(for: bag.id)
+                        ) {
+                            selectedBag = bag
+                        }
+                    }
+                }
+                .padding(.horizontal, DesignSystem.Spacing.lg)
+            }
+        }
+    }
+
+    private func bagBinding(for bagId: String) -> Binding<Bool> {
+        Binding(
+            get: { appState.isSaved(bagId: bagId) },
+            set: { _ in appState.toggleSaved(bagId: bagId) }
+        )
     }
 }
 
